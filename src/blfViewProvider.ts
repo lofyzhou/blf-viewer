@@ -3,7 +3,7 @@ import * as path    from 'path';
 import * as fs      from 'fs';
 
 import { BLFReader }                        from './blf-parser';
-import { applyFilter, applySort, toWire }   from './blf-host';
+import { applyFilter, applySort, findFirstMatchingIndex, toWire } from './blf-host';
 import { getWebviewHtml, getNonce }         from './blf-webview';
 import { WebviewMessage }                   from './blf-types';
 import { parseDbcFile, DbcDatabase }        from './dbc-parser';
@@ -58,6 +58,20 @@ export class BLFViewProvider implements vscode.CustomReadonlyEditorProvider {
           startIndex:    req.startIndex,
           totalFiltered: sorted.length,
           rows:          page.map((m, li) => toWire(m, req.startIndex + li, dbcDb)),
+        });
+        return;
+      }
+
+      if (req.type === 'searchFirst') {
+        const filtered = applyFilter(messages!, req.filter);
+        const sorted   = applySort(filtered,    req.sort);
+        const index    = findFirstMatchingIndex(sorted, req.search);
+
+        webviewPanel.webview.postMessage({
+          type:    'searchResult',
+          index,
+          row:     index >= 0 ? toWire(sorted[index], index, dbcDb) : undefined,
+          message: index >= 0 ? undefined : 'No matching message found',
         });
         return;
       }

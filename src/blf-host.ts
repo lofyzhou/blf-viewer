@@ -9,50 +9,105 @@ import { FilterState, SortState, WireMessage, WireSignal } from './blf-types';
 // ── Filter ────────────────────────────────────────────────────────────────────
 
 export function applyFilter(messages: CANMessage[], f: FilterState): CANMessage[] {
-  const idLower = f.id.toLowerCase().trim();
-  const { dir, msgType, channel } = f;
+  const criteria = compileFilterCriteria(f);
 
   // Fast path: nothing active
-  if (!idLower && !dir && !msgType && !channel) return messages;
+  if (!criteria.active) {
+    return messages;
+  }
+
+  return messages.filter(m => matchesFilterCriteria(m, criteria));
+}
+
+export function findFirstMatchingIndex(messages: CANMessage[], search: FilterState): number {
+  const criteria = compileFilterCriteria(search);
+  if (!criteria.active) {
+    return -1;
+  }
+
+  return messages.findIndex(m => matchesFilterCriteria(m, criteria));
+}
+
+interface CompiledFilterCriteria {
+  idLowerArr: string[];
+  dataLower: string;
+  dir: string;
+  msgType: string;
+  channel: string;
+  active: boolean;
+}
+
+function compileFilterCriteria(f: FilterState): CompiledFilterCriteria {
+  const idLower = f.id.toLowerCase().trim();
+  const dataLower = normalizeDataFilter(f.data);
+  const { dir, msgType, channel } = f;
 
   // Pre-split the IDs into an array to avoid splitting inside the loop
   const idLowerArr = idLower ? idLower.split(',').map(id => id.trim()).filter(id => id !== '') : [];
 
-  return messages.filter(m => {
-    // Direction filter
-    if (dir && (m.isRx ? 'RX' : 'TX') !== dir) return false;
+  return {
+    idLowerArr,
+    dataLower,
+    dir,
+    msgType,
+    channel,
+    active: Boolean(idLowerArr.length || dataLower || dir || msgType || channel),
+  };
+}
 
-    // Type filter
-    if (msgType) {
-      const t = m.isErrorFrame ? 'ERR' : m.isFd ? 'FD' : 'STD';
-      if (t !== msgType) return false;
+function normalizeDataFilter(value: string | undefined): string {
+  return (value ?? '').replace(/0x/gi, '').replace(/[^0-9a-f]/gi, '').toLowerCase();
+}
+
+function matchesFilterCriteria(m: CANMessage, criteria: CompiledFilterCriteria): boolean {
+  const { idLowerArr, dataLower, dir, msgType, channel } = criteria;
+
+  // Direction filter
+  if (dir && (m.isRx ? 'RX' : 'TX') !== dir) {
+    return false;
+  }
+
+  // Type filter
+  if (msgType) {
+    const t = m.isErrorFrame ? 'ERR' : m.isFd ? 'FD' : 'STD';
+    if (t !== msgType) {
+      return false;
     }
+  }
 
-    // Channel filter — stored as 0-based integer string
-    if (channel !== '' && String(m.channel) !== channel) return false;
+  // Channel filter — stored as 0-based integer string
+  if (channel !== '' && String(m.channel) !== channel) {
+    return false;
+  }
 
-    // ID filter — matches if the message ID satisfies ANY of the user-provided ID strings
-    if (idLowerArr.length > 0) {
-      const raw    = m.arbitrationId.toString(16).toLowerCase();
-      const padStd = raw.padStart(3, '0');
-      const padExt = raw.padStart(8, '0');
+  // Data filter — matches a contiguous payload byte sequence.
+  if (dataLower && !m.data.toString('hex').toLowerCase().includes(dataLower)) {
+    return false;
+  }
 
-      // Check if current message matches any of the IDs in the search array
-      const matchesAnyId = idLowerArr.some(id => {
-        return (
-          raw.includes(id)    ||
-          padStd.includes(id) ||
-          padExt.includes(id) ||
-          ('0x' + raw).includes(id) ||
-          ('0x' + padExt).includes(id)
-        );
-      });
+  // ID filter — matches if the message ID satisfies ANY of the user-provided ID strings
+  if (idLowerArr.length > 0) {
+    const raw    = m.arbitrationId.toString(16).toLowerCase();
+    const padStd = raw.padStart(3, '0');
+    const padExt = raw.padStart(8, '0');
 
-      if (!matchesAnyId) return false;
+    // Check if current message matches any of the IDs in the search array
+    const matchesAnyId = idLowerArr.some(id => {
+      return (
+        raw.includes(id)    ||
+        padStd.includes(id) ||
+        padExt.includes(id) ||
+        ('0x' + raw).includes(id) ||
+        ('0x' + padExt).includes(id)
+      );
+    });
+
+    if (!matchesAnyId) {
+      return false;
     }
+  }
 
-    return true;
-  });
+  return true;
 }
 
 // ── Sort ──────────────────────────────────────────────────────────────────────
