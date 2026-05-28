@@ -40,9 +40,14 @@ export function getWebviewHtml(nonce: string, fileName: string): string {
 
   <!-- Filter toolbar -->
   <div class="toolbar">
+    <span class="panel-label">Filter</span>
     <div class="search-wrap">
       <span class="search-icon">⌕</span>
       <input type="text" class="filter-id" id="fId" placeholder="Filter by ID…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="search-wrap data-search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" class="filter-data" id="fData" placeholder="Data bytes…" autocomplete="off" spellcheck="false">
     </div>
     <select id="fDir">
       <option value="">All Dir</option>
@@ -64,6 +69,33 @@ export function getWebviewHtml(nonce: string, fileName: string): string {
     <button class="btn" id="btnImportDbc" title="Import DBC file">⊕ DBC</button>
     <span class="dbc-badge" id="dbcBadge" style="display:none"></span>
     <button class="btn" id="btnClearDbc" style="display:none" title="Remove DBC">✕</button>
+  </div>
+
+  <!-- Search toolbar -->
+  <div class="toolbar search-toolbar">
+    <span class="panel-label">Search</span>
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" class="filter-id" id="sId" placeholder="Search ID…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="search-wrap data-search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" class="filter-data" id="sData" placeholder="Search data bytes…" autocomplete="off" spellcheck="false">
+    </div>
+    <select id="sDir">
+      <option value="">Any Dir</option>
+      <option value="RX">RX</option>
+      <option value="TX">TX</option>
+    </select>
+    <select id="sType">
+      <option value="">Any Type</option>
+      <option value="STD">STD</option>
+      <option value="FD">CAN FD</option>
+      <option value="ERR">Error</option>
+    </select>
+    <select id="sCh"><option value="">Any Ch</option></select>
+    <button class="btn data-search-btn" id="btnSearch" title="Locate first matching row">Find</button>
+    <button class="btn" id="btnClearSearch">✕ Clear</button>
   </div>
 
   <!-- Active grouping banner -->
@@ -194,6 +226,11 @@ const CSS = `
   /* Toolbar */
   .toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 16px;
     background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }
+  .search-toolbar { background: var(--bg); }
+  .panel-label {
+    width: 48px; flex-shrink: 0; color: var(--fg2); font-size: 10px; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase;
+  }
   .search-wrap { position: relative; display: flex; align-items: center; }
   .search-icon { position: absolute; left: 8px; color: var(--fg2); font-size: 12px;
     pointer-events: none; user-select: none; }
@@ -204,6 +241,9 @@ const CSS = `
   }
   input[type="text"]:focus, select:focus { border-color: var(--accent); }
   .filter-id { padding: 0 8px 0 26px; width: 160px; }
+  .data-search-wrap { gap: 4px; }
+  .filter-data { padding: 0 8px 0 26px; width: 150px; }
+  .data-search-btn { height: 26px; padding: 0 8px; font-size: 11px; }
   select { padding: 0 8px; cursor: pointer; }
   .toolbar-space { flex: 1; }
   .result-count { font-size: 11px; color: var(--fg2); font-family: var(--mono); white-space: nowrap; }
@@ -457,7 +497,7 @@ let lastClickedI  = -1;           // anchor for shift-click range
 const pageCache   = new Map();    // Map<pageStart, WireMessage[]>
 const pending     = new Set();    // page-starts requested but not yet received
 
-let filter = { id:'', dir:'', msgType:'', channel:'' };
+let filter = { id:'', data:'', dir:'', msgType:'', channel:'' };
 let sort   = { col:'i', dir:'asc' };
 
 // Colorization: Map<rowI, colorName>
@@ -1244,12 +1284,19 @@ function dr(k, v) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const fId   = document.getElementById('fId');
+const fData = document.getElementById('fData');
 const fDir  = document.getElementById('fDir');
 const fType = document.getElementById('fType');
 const fCh   = document.getElementById('fCh');
+const sId   = document.getElementById('sId');
+const sData = document.getElementById('sData');
+const sDir  = document.getElementById('sDir');
+const sType = document.getElementById('sType');
+const sCh   = document.getElementById('sCh');
 
 function onFilterChange() {
   filter.id      = (fId?.value   ?? '').trim().toLowerCase();
+  filter.data    = (fData?.value ?? '').trim().toLowerCase();
   filter.dir     = fDir?.value   ?? '';
   filter.msgType = fType?.value  ?? '';
   filter.channel = fCh?.value    ?? '';
@@ -1257,12 +1304,58 @@ function onFilterChange() {
 }
 
 fId?.addEventListener('input',   onFilterChange);
+fData?.addEventListener('input', onFilterChange);
 fDir?.addEventListener('change', onFilterChange);
 fType?.addEventListener('change',onFilterChange);
 fCh?.addEventListener('change',  onFilterChange);
 
+function getSearchState() {
+  return {
+    id:      (sId?.value   ?? '').trim().toLowerCase(),
+    data:    (sData?.value ?? '').trim().toLowerCase(),
+    dir:     sDir?.value   ?? '',
+    msgType: sType?.value  ?? '',
+    channel: sCh?.value    ?? '',
+  };
+}
+
+function hasSearchCriteria(search) {
+  return Boolean(search.id || search.data || search.dir || search.msgType || search.channel);
+}
+
+function runSearch() {
+  const search = getSearchState();
+  if (!hasSearchCriteria(search)) {
+    showToast('Enter search criteria');
+    return;
+  }
+
+  vscode.postMessage({
+    type: 'searchFirst',
+    filter: { ...filter },
+    sort: { ...sort },
+    search,
+  });
+}
+
+document.getElementById('btnSearch')?.addEventListener('click', runSearch);
+[sId, sData, sDir, sType, sCh].forEach(el => {
+  el?.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') runSearch();
+  });
+});
+
+document.getElementById('btnClearSearch')?.addEventListener('click', () => {
+  if (sId)   sId.value   = '';
+  if (sData) sData.value = '';
+  if (sDir)  sDir.value  = '';
+  if (sType) sType.value = '';
+  if (sCh)   sCh.value   = '';
+});
+
 document.getElementById('btnClear').addEventListener('click', () => {
   if (fId)   fId.value   = '';
+  if (fData) fData.value = '';
   if (fDir)  fDir.value  = '';
   if (fType) fType.value = '';
   if (fCh)   fCh.value   = '';
@@ -1318,6 +1411,10 @@ window.addEventListener('message', ({ data: msg }) => {
       const o = document.createElement('option');
       o.value = String(c); o.textContent = 'Ch ' + c;
       fCh?.appendChild(o);
+
+      const so = document.createElement('option');
+      so.value = String(c); so.textContent = 'Ch ' + c;
+      sCh?.appendChild(so);
     });
 
     // Parse errors
@@ -1366,6 +1463,25 @@ window.addEventListener('message', ({ data: msg }) => {
     }
 
     renderViewport();
+  }
+
+  // ── searchResult ─────────────────────────────────────────────────────────
+  else if (msg.type === 'searchResult') {
+    if (msg.index < 0) {
+      showToast(msg.message || 'No matching message found');
+      return;
+    }
+
+    selectedSet.clear();
+    selectedRowI = msg.index;
+    lastClickedI = msg.index;
+    updateSelCount();
+    if (msg.row) showDetail(msg.row);
+
+    scroller.scrollTop = Math.max(0, msg.index * ROW_H - ROW_H * 3);
+    requestPagesForRange(msg.index, msg.index);
+    renderViewport();
+    showToast('Found row #' + (msg.index + 1).toLocaleString());
   }
 
   // ── error ─────────────────────────────────────────────────────────────────
